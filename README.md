@@ -1,7 +1,8 @@
-# BPM code for reproducibility
+# Meta-learning for Process Discovery
 
-> This file lists the steps to reproduce the experiments, analysis and figures generated for this paper submission at the BPM 2022 conference.
+> This file lists the steps to reproduce the experiments, analysis and figures generated for this paper submission at the BPM 2022 conference, ensuring reproducibility.
 
+This work proposes a meta-learning approach to map event log profiles, discovery algorithms, and quality criteria. We propose a set of 93 meta-features extracted from the event logs used as meta-instances in our experiment. The meta-features capture process behavior at different levels, such as activity, trace, and log. Using meta-learning, we show that it is possible to leverage the process model quality by automatically recommending appropriate discovery algorithms considering the process behavior.
 
 ## Contents
 
