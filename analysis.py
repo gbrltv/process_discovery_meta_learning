@@ -1,14 +1,23 @@
 import os
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import numpy as np
+from statistics import mode
 from collections import Counter
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, f1_score
-from sklearn.dummy import DummyClassifier
-from statistics import mode
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    confusion_matrix,
+    ConfusionMatrixDisplay,
+    classification_report,
+)
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import Normalizer
+from pymfe.mfe import MFE
+import warnings
 
 
 def heatmap(df, metrics, outpath="analysis"):
@@ -138,7 +147,7 @@ def meta_learning_exp1(X, y, outpath="analysis"):
             [
                 accuracy_score(y_test, majority_y),
                 f1_score(y_test, majority_y, average="weighted"),
-                "Majority (AM)",
+                "Majority",
             ]
         )
 
@@ -168,6 +177,109 @@ def meta_learning_exp1(X, y, outpath="analysis"):
     plt.tight_layout()
     plt.savefig(f"{outpath}/5_algorithms_boxplot_5metrics.pdf", dpi=300)
     plt.close()
+
+
+def loo_cv(df):
+    """
+    Leave-one-out cross validation.
+    For each instance IN, trains a model with all instances except IN and predicts IN's class.
+    """
+    out = []
+    for i in range(len(df)):
+        test = df.loc[i].copy()
+        train = df.drop(i, axis=0).copy()
+        X_train, y_train = train.drop(["log", "variant"], axis=1), train["variant"]
+        X_test, y_test = test.drop(["log", "variant"]), test["variant"]
+
+        rf = RandomForestClassifier(random_state=10, n_jobs=-1)
+        rf.fit(X_train.to_numpy(), y_train)
+        y_pred = rf.predict(X_test.to_numpy().reshape(1, -1))[0]
+        out.append([test["log"], y_test, y_pred])
+
+    return pd.DataFrame(out, columns=["log", "label", "pred"])
+
+
+def plot_confusion_matrix(y_true, y_pred, labels, outpath="analysis"):
+    """
+    Plotting confusion matrix for LOOCV experiment
+    """
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
+    disp.plot()
+    plt.tight_layout()
+    plt.savefig(f"{outpath}/leave_one_out_confusion_matrix.pdf", dpi=300)
+    plt.close()
+
+
+def pca_analysis(meta_database, loo_cv, outpath="analysis"):
+    """
+    Dimensionality reduction analysis with PCA. We also plot correct/incorrect classification results.
+    """
+    meta_database.insert(1, "classification", "")
+    meta_database.iloc[
+        meta_database[loo_cv["label"] == loo_cv["pred"]].index, 1
+    ] = "Correct"
+    meta_database.iloc[
+        meta_database[loo_cv["label"] != loo_cv["pred"]].index, 1
+    ] = "Incorrect"
+
+    pca = PCA(n_components=2)
+    X_new = pca.fit_transform(
+        Normalizer().fit_transform(
+            meta_database.drop(["log", "classification", "variant"], axis=1).to_numpy()
+        )
+    )
+    print(
+        f"Explained variance ratio: PC 1 ({np.round(pca.explained_variance_ratio_[0]*100, 2)}%) and PC 2 ({np.round(pca.explained_variance_ratio_[1]*100, 2)}%)"
+    )
+    print("Plotting PCA", end="\n\n")
+    df_pca = pd.DataFrame(X_new, columns=["PC1", "PC2"])
+    df_pca.insert(2, "Classification", meta_database["classification"])
+    df_pca.insert(2, "Meta-target", meta_database["variant"])
+
+    sns.set_theme()
+    fig, ax = plt.subplots(figsize=(8, 6))
+    sns.scatterplot(
+        ax=ax,
+        data=df_pca,
+        x="PC1",
+        y="PC2",
+        hue="Meta-target",
+        style="Classification",
+        palette="bright",
+        alpha=0.9,
+        hue_order=["AM", "HM", "IM", "IMf", "IMd"],
+        markers={"Correct": "o", "Incorrect": "X"},
+        style_order=["Correct", "Incorrect"],
+        s=100,
+    )
+    ax.set_xlabel(
+        f"PC1 ({np.round(pca.explained_variance_ratio_[0]*100, 2)}% explained variance)"
+    )
+    ax.set_ylabel(
+        f"PC2 ({np.round(pca.explained_variance_ratio_[1]*100, 2)}% explained variance)"
+    )
+    plt.tight_layout()
+    plt.savefig(f"{outpath}/pca.pdf", dpi=300)
+    plt.close()
+
+
+def complexity_analysis(df):
+    """
+    Metrics to measure classification complexity
+    """
+    warnings.simplefilter("ignore")
+    mfe = MFE(groups="complexity", features=["f1v", "n2"])
+    mfe.fit(
+        X=df.drop(["log", "variant"], axis=1).to_numpy(),
+        y=list(df["variant"]),
+        transform_num=False,
+    )
+    ft = mfe.extract(suppress_warnings=True, divide="ignore")
+    complexity = dict(zip(ft[0], ft[1]))
+
+    print("F1v:", complexity["f1v.mean"])
+    print("N2:", complexity["n2.mean"], end="\n\n")
 
 
 def meta_learning_exp2(X, y, outpath="analysis"):
@@ -212,7 +324,7 @@ def meta_learning_exp2(X, y, outpath="analysis"):
             [
                 accuracy_score(y_test, majority_y),
                 f1_score(y_test, majority_y, average="weighted"),
-                "Majority (IM)",
+                "Majority",
             ]
         )
 
@@ -471,13 +583,35 @@ df_meta_database = create_meta_database(df_models, df_logs, metrics)
 X = df_meta_database.drop(["log", "variant"], axis=1)
 y = df_meta_database["variant"].astype("category").cat.codes
 
-print(f"{bold}Meta-learning prediction (Exp. 1){end}", end="\n\n")
+print(f"{bold}Meta-learning prediction{end}", end="\n\n")
 meta_learning_exp1(X, y)
 
 print(f"{bold}Analyzing feature importance{end}", end="\n\n")
 plot_feature_importance(X, y)
 
-print(f"{bold}Pipeline using only traditional discovery algorithms (Exp. 2){end}")
+print(f"{bold}Leave-one-out experiment{end}")
+df_loo_cv = loo_cv(df_meta_database)
+
+# performances
+y_true, y_pred = df_loo_cv["label"], df_loo_cv["pred"]
+print("Meta-Model Acc:", np.round(accuracy_score(y_true, y_pred), 2))
+print("Meta-Model F1:", np.round(f1_score(y_true, y_pred, average="weighted"), 2))
+
+# Confusion matrix
+labels = ["AM", "HM", "IM", "IMd", "IMf"]
+plot_confusion_matrix(y_true, y_pred, labels)
+
+# Classification report
+print("Performance per meta-target")
+print(classification_report(y_true, y_pred, target_names=labels), end="\n\n")
+
+print(f"{bold}Dimensionality analysis (PCA with 2 components){end}")
+pca_analysis(df_meta_database.copy(), df_loo_cv)
+
+print(f"{bold}Complexity analysis{end}")
+complexity_analysis(df_meta_database)
+
+print(f"{bold}Pipeline using only traditional discovery algorithms{end}")
 print("Dropping IMf and IMd", end="\n\n")
 
 # Removing IMf and IMd
